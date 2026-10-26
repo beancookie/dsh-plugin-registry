@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { dirname, join } from 'node:path'
+import { delimiter, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { readProfileManifest, resolveProfileDir, writeProfileManifest } from '@deepseek-ai/dsh-app-boot'
@@ -255,13 +255,18 @@ export class ProfileStore {
     }
     try {
       if (process.platform === 'win32') {
-        const corepackJs = join(dirname(process.execPath), 'node_modules', 'corepack', 'dist', 'corepack.js')
-        if (existsSync(corepackJs)) {
-          await execFileAsync(process.execPath, [corepackJs, 'pnpm', ...args], opts)
-          return
-        }
-        const cmd = `corepack pnpm ${args.map((a) => JSON.stringify(a)).join(' ')}`
-        await execFileAsync(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', cmd], opts)
+        // Desktop Electron binaries need not share a directory with Node/Corepack.
+        // Locate the actual JS entry and pass argv directly: cmd.exe otherwise
+        // preserves JSON quotes as literal characters (for example, "add").
+        const roots = [dirname(process.execPath), ...(process.env.PATH ?? '').split(delimiter)].filter(Boolean)
+        const corepackJs = roots
+          .map((root) => join(root, 'node_modules', 'corepack', 'dist', 'corepack.js'))
+          .find((file) => existsSync(file))
+        if (!corepackJs) throw new Error('Corepack JS entry not found beside the runtime or on PATH; install Corepack with Node.js.')
+        await execFileAsync(process.execPath, [corepackJs, 'pnpm', ...args], {
+          ...opts,
+          env: { ...opts.env, ELECTRON_RUN_AS_NODE: '1' },
+        })
         return
       }
       await execFileAsync('corepack', ['pnpm', ...args], opts)
